@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="da">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pakke-tracker</title>
+<style>
+  :root { --bg: #f4f3ef; --card: #fff; --text: #222; --muted: #777; --line: #ddd; --accent: #d97706; --hit: #fde68a; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1b1b1a; --card: #262624; --text: #eee; --muted: #999; --line: #3a3a38; --hit: #6b4e12; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 20px; margin: 0; flex: 1; }
+  #search { padding: 8px 10px; font-size: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--text); width: 220px; max-width: 100%; }
+  #cams-status { font-size: 13px; color: var(--muted); width: 100%; }
+  main { padding: 16px; max-width: 1100px; margin: 0 auto; }
+  #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+  .zone { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px; min-height: 110px; }
+  .zone.hit { background: var(--hit); border-color: var(--accent); }
+  .zone-head { display: flex; justify-content: space-between; margin-bottom: 8px; }
+  .zone-head span { color: var(--muted); }
+  .pkgs { display: flex; flex-wrap: wrap; gap: 6px; }
+  .pkg { border: 1px solid var(--line); border-radius: 8px; background: none; color: var(--text); padding: 3px; cursor: pointer; display: flex; flex-direction: column; align-items: center; font-size: 12px; }
+  .pkg img { width: 48px; height: 36px; object-fit: cover; border-radius: 4px; }
+  #detail { background: var(--card); border: 1px solid var(--accent); border-radius: 12px; padding: 12px; margin-top: 16px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  #detail[hidden] { display: none; }
+  #detail img { max-width: 160px; border-radius: 8px; }
+  button.action, select { padding: 8px 12px; font-size: 15px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  details { margin-top: 12px; }
+  summary { cursor: pointer; color: var(--muted); }
+  h2 { font-size: 17px; margin: 20px 0 10px; }
+  #hint { background: var(--card); border: 1px solid var(--line); border-left: 4px solid #16a34a; border-radius: 10px; padding: 10px 12px; font-size: 15px; }
+  #hint.wait { border-left-color: var(--accent); }
+  #hint:empty { display: none; }
+  .cams { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; margin-top: 10px; }
+  .cams img { width: 100%; border-radius: 8px; background: #000; }
+  figure { margin: 0; } figcaption { font-size: 13px; color: var(--muted); }
+  #log { list-style: none; padding: 0; font-size: 14px; }
+  #log li { padding: 6px 0; border-bottom: 1px solid var(--line); }
+  #log time { color: var(--muted); margin-right: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Pakke-tracker</h1>
+  <input id="search" placeholder="Søg pakke-nr, f.eks. 17" inputmode="numeric">
+  <div id="cams-status"></div>
+</header>
+<main>
+  <div id="hint"></div>
+
+  <details open>
+    <summary>Kameraer</summary>
+    <div class="cams">
+      {% for c in cameras %}
+      <figure>
+        <img src="/video/{{ c }}" alt="Kamera {{ c }}">
+        <figcaption>{{ c }}
+          <button class="action cam-reset" data-camera="{{ c }}"
+                  title="Fjern alle pakker og gå ud af billedet først">Tom scene</button>
+        </figcaption>
+      </figure>
+      {% endfor %}
+    </div>
+  </details>
+
+  <h2>Hylder</h2>
+  <section id="grid"></section>
+
+  <section id="detail" hidden>
+    <img id="d-photo" alt="Foto af pakken">
+    <div>
+      <div id="d-text"></div>
+      <p>
+        <select id="d-zone"></select>
+        <button class="action" id="d-move">Flyt hertil</button>
+        <button class="action" id="d-gone">Udleveret</button>
+        <button class="action" id="d-close">Luk</button>
+      </p>
+    </div>
+  </section>
+
+  <h2>Seneste hændelser</h2>
+  <ul id="log"></ul>
+</main>
+
+<script>
+let state = { zones: [], packages: [], log: [], cameras: {} };
+let selected = null;
+
+function clock(t) {
+  const d = new Date(t * 1000);
+  const today = d.toDateString() === new Date().toDateString();
+  return today ? d.toLocaleTimeString('da-DK') : d.toLocaleString('da-DK');
+}
+
+async function refresh() {
+  try {
+    const r = await fetch('/api/status');
+    if (!r.ok) throw new Error(r.status);
+    state = await r.json();
+    render();
+  } catch (e) {
+    document.getElementById('cams-status').textContent = 'Ingen forbindelse til serveren';
+  }
+}
+
+function render() {
+  const q = document.getElementById('search').value.trim().replace('#', '');
+  const grid = document.getElementById('grid');
+  grid.innerHTML = '';
+  const zones = [...state.zones];
+  for (const p of state.packages) if (!zones.includes(p.zone)) zones.push(p.zone);
+  for (const zone of zones) {
+    const pkgs = state.packages.filter(p => p.zone === zone);
+    const card = document.createElement('div');
+    card.className = 'zone';
+    if (q && pkgs.some(p => String(p.id) === q)) card.classList.add('hit');
+    const head = document.createElement('div');
+    head.className = 'zone-head';
+    head.innerHTML = '<b></b><span></span>';
+    head.querySelector('b').textContent = state.zones.includes(zone) ? zone : `${zone} (ukendt zone)`;
+    head.querySelector('span').textContent = pkgs.length + (pkgs.length === 1 ? ' pakke' : ' pakker');
+    card.appendChild(head);
+    const list = document.createElement('div');
+    list.className = 'pkgs';
+    for (const p of pkgs) {
+      const b = document.createElement('button');
+      b.className = 'pkg';
+      b.innerHTML = `<img src="/photo/${p.id}?v=${p.updated}" alt=""><span>#${p.id}</span>`;
+      b.onclick = () => openDetail(p);
+      list.appendChild(b);
+    }
+    card.appendChild(list);
+    grid.appendChild(card);
+  }
+
+  const log = document.getElementById('log');
+  log.innerHTML = '';
+  for (const e of state.log) {
+    const li = document.createElement('li');
+    li.innerHTML = `<time>${clock(e.time)}</time>`;
+    li.append(e.text);
+    log.appendChild(li);
+  }
+
+  document.getElementById('cams-status').textContent =
+    Object.entries(state.cameras).map(([n, s]) => `${n}: ${s}`).join(' · ');
+  showHint();
+
+  if (selected) {
+    const now = state.packages.find(p => p.id === selected.id);
+    if (!now) {
+      closeDetail();
+    } else if (now.zone !== selected.zone) {
+      openDetail(now);
+    }
+  }
+}
+
+function showHint() {
+  const hint = document.getElementById('hint');
+  const statuses = Object.values(state.cameras);
+  if (statuses.some(s => s.includes('hylde-markører'))) {
+    hint.className = 'wait';
+    hint.textContent = 'Leder efter hylderne: ret kameraet mod de printede markører (markers/ark_1.png).';
+    return;
+  }
+  const bad = statuses.find(s => s !== 'kører');
+  if (bad) {
+    hint.className = 'wait';
+    hint.textContent = 'Kamera: ' + bad;
+    return;
+  }
+  let seen = 0;
+  for (const n of Object.values(state.seen || {})) seen = Math.max(seen, n);
+  const onShelf = state.packages.length;
+  hint.className = '';
+  hint.textContent = `Kameraet ser ${seen} ${seen === 1 ? 'pakke' : 'pakker'} lige nu · ${onShelf} på hylderne`;
+}
+
+function countdown(button, url) {
+  const label = button.textContent;
+  button.disabled = true;
+  let left = 3;
+  button.textContent = `Gå ud af billedet ... ${left}`;
+  const timer = setInterval(() => {
+    left -= 1;
+    if (left > 0) {
+      button.textContent = `Gå ud af billedet ... ${left}`;
+      return;
+    }
+    clearInterval(timer);
+    post(url).then(() => {
+      button.textContent = label;
+      button.disabled = false;
+    });
+  }, 1000);
+}
+
+function closeDetail() {
+  document.getElementById('detail').hidden = true;
+  selected = null;
+}
+
+function openDetail(p) {
+  selected = p;
+  document.getElementById('detail').hidden = false;
+  document.getElementById('d-photo').src = `/photo/${p.id}?v=${p.updated}`;
+  document.getElementById('d-text').textContent =
+    `Pakke #${p.id} ligger i ${p.zone} (set af: ${p.cameras})`;
+  const sel = document.getElementById('d-zone');
+  sel.innerHTML = '';
+  for (const z of state.zones) sel.add(new Option(z, z, false, z === p.zone));
+}
+
+async function post(url, body) {
+  try {
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+    if (!r.ok) {
+      const data = await r.json().catch(() => ({}));
+      alert('Det gik ikke: ' + (data.error || r.status));
+      return false;
+    }
+  } catch (e) {
+    alert('Ingen forbindelse til serveren');
+    return false;
+  }
+  refresh();
+  return true;
+}
+
+async function postAndClose(url, body) {
+  if (await post(url, body)) closeDetail();
+}
+
+document.getElementById('d-move').onclick = () => {
+  if (selected) postAndClose(`/api/packages/${selected.id}/move`, { zone: document.getElementById('d-zone').value });
+};
+document.getElementById('d-gone').onclick = () => {
+  if (selected) postAndClose(`/api/packages/${selected.id}/gone`);
+};
+document.getElementById('d-close').onclick = closeDetail;
+for (const b of document.querySelectorAll('.cam-reset')) {
+  b.onclick = () => countdown(b, `/api/cameras/${encodeURIComponent(b.dataset.camera)}/background`);
+}
+document.getElementById('search').oninput = render;
+
+refresh();
+setInterval(refresh, 1000);
+</script>
+</body>
+</html>

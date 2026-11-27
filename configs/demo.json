@@ -1,0 +1,41 @@
+{
+  "cameras": {
+    "side": {"source": "input/floor_demo.mp4", "shelves": "aruco", "width": 640, "height": 480, "max_fps": 15}
+  },
+  "zones_file": "configs/zones.json",
+  "aruco": {
+    "dictionary": "DICT_4X4_50",
+    "zone": [0, -4, 5, 4],
+    "stable_frames": 3,
+    "names": {"0": "A1", "1": "A2", "2": "A3", "3": "B1", "4": "B2", "5": "B3"}
+  },
+  "database": "data/demo.db",
+  "photo_dir": "data/demo_photos",
+  "web": {"host": "127.0.0.1", "port": 8000},
+  "person_detector": {
+    "enabled": false,
+    "model": "",
+    "confidence": 0.4,
+    "every_n_frames": 3
+  },
+  "watcher": {
+    "settle_seconds": 1.0,
+    "pixel_threshold": 25,
+    "motion_ratio": 0.01,
+    "min_blob_ratio": 0.03,
+    "max_blob_ratio": 0.85,
+    "outside_margin": 20,
+    "same_threshold": 12,
+    "stuck_seconds": 10,
+    "refresh_seconds": 1.0,
+    "package_min_area": 1200,
+    "package_min_score": 0.6
+  },
+  "inventory": {
+    "merge_seconds": 30,
+    "move_seconds": 15,
+    "photo_camera": "side",
+    "log_keep": 5000,
+    "photo_days": 30
+  }
+}
